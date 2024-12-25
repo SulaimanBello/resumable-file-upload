@@ -6,14 +6,53 @@ const path = require("path");
 class UploadServer {
   constructor(port = 80) {
     this.port = port;
+    this.publicDir = path.join(__dirname, 'public');
     this.uploadsDir = path.join(__dirname, 'uploads');
+    this.initializeDirs();
     this.server = http.createServer(this.handleRequest.bind(this));
-    this.setupUploadsDirectory();
+    this.cleanUploadsDirectory();
   }
 
-  setupUploadsDirectory() {
-    if (!fs.existsSync(this.uploadsDir)) {
-      fs.mkdirSync(this.uploadsDir);
+  initializeDirs() {
+    [this.publicDir, this.uploadsDir].forEach(dir => {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { 
+          recursive: true,
+          mode: 0o755 // Writable directory
+        });
+      }
+    });
+
+    // Create index.html if it doesn't exist
+    const indexPath = path.join(this.publicDir, 'index.html');
+    if (!fs.existsSync(indexPath)) {
+      fs.writeFileSync(indexPath, `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>File Uploader</title>
+</head>
+<body>
+    <h1>File Uploader</h1>
+    File: <input type='file' id='f'>
+    <button id='btnUpload'>Read & Upload</button>
+    <input type="button" id='pause' value="resumed">
+    <div id='divOutput'></div>
+    <script src="app.js"></script>
+</body>
+</html>`);
+    }
+  }
+
+  cleanUploadsDirectory() {
+    try {
+      const files = fs.readdirSync(this.uploadsDir);
+      files.forEach(file => {
+        fs.unlinkSync(path.join(this.uploadsDir, file));
+      });
+    } catch (error) {
+      console.error('Error cleaning uploads directory:', error);
     }
   }
 
@@ -21,10 +60,10 @@ class UploadServer {
     try {
       switch(req.url) {
         case "/":
-          await this.serveFile(res, "public/index.html");
+          await this.serveFile(res, path.join(this.publicDir, "index.html"));
           break;
         case "/app.js":
-          await this.serveFile(res, "public/app.js");
+          await this.serveFile(res, path.join(this.publicDir, "app.js"));
           break;
         case "/upload":
           await this.handleUpload(req, res);
