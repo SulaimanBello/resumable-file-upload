@@ -1,114 +1,147 @@
-/*
-       * @TODO :: lowest number is the highest priority
-       * 1 crosscheck if the file received at server is OK
-       * 2 test the upload with multiple users simultaneously 
-       * 2 organise the code
-       * 3 integrate it with watchIT
-       *  DONE fix the resume functionality: it should not create a new file when resuming
-       */
-let fileData = null;
-let CHUNK_SIZE = 0;
-let isResumed = true
-let lastChunkIDUploaded = 0
-let result = null
-let plusOne = 0
-// console.log(lastChunkIDUploaded)
-const btnUpload = document.getElementById("btnUpload");
-const divOutput = document.getElementById("divOutput");
-const pauseBtn = document.getElementById("pause");
+// app.js
+class FileUploader {
+  constructor(options = {}) {
+    this.chunkSize = options.chunkSize || 50000;
+    this.maxRetries = options.maxRetries || 3;
+    this.initElements();
+    this.initState();
+    this.bindEvents();
+  }
 
-const f = document.getElementById("f");
-pauseBtn.addEventListener("click", function () {
-    // if (isResumed) {
-    plusOne = 1
+  initElements() {
+    this.uploadBtn = document.getElementById("btnUpload");
+    this.pauseBtn = document.getElementById("pause");
+    this.fileInput = document.getElementById("f");
+    this.output = document.getElementById("divOutput");
+  }
 
-    // console.log(lastChunkIDUploaded, 'sdfsdfsd')
+  initState() {
+    this.fileData = null;
+    this.isUploading = false;
+    this.isPaused = false;
+    this.lastChunkId = 0;
+  }
 
-    isResumed = !isResumed
-    // console.log('resumed', isResumed)
-    if (isResumed) {
-        pauseBtn.value = 'resumed'
-        upload(result)
-    } else {
-        pauseBtn.value = 'paused'
+  bindEvents() {
+    this.uploadBtn.addEventListener("click", () => this.startUpload());
+    this.pauseBtn.addEventListener("click", () => this.togglePause());
+  }
 
+  async startUpload() {
+    if (this.isUploading) return;
+    
+    try {
+      this.isUploading = true;
+      const file = await this.readFile();
+      await this.uploadChunks(file);
+    } catch (error) {
+      this.updateStatus(`Error: ${error.message}`);
+    } finally {
+      this.isUploading = false;
     }
-})
+  }
 
-btnUpload.addEventListener("click", async () => {
-    // console.log(lastChunkIDUploaded,'sdfsdfsd')
-    result = await readFile(f);
-
-    upload(result)
-})
-async function readFile(f) {
-    if (!fileData) {
-        const fileReader = new FileReader();
-        const file = f.files[0];
-
-        fileData = await new Promise((resolve, reject) => {
-            fileReader.onload = (ev) => {
-                const fileMetadata = {
-                    Name: file.name,
-                    Size: file.size,
-                    Type: file.type,
-                    theFile: ev.target.result
-                };
-                resolve({ fileData: ev.target.result, fileMetadata });
-            };
-
-            fileReader.onerror = (error) => {
-                reject(error);
-            };
-
-            fileReader.readAsArrayBuffer(file);
-        });
+  async readFile() {
+    if (!this.fileInput.files[0]) {
+      throw new Error("Please select a file");
     }
 
-    return fileData;
-}
-async function upload(file) {
-    console.log('upload invoked')
-    if (file.fileData.byteLength < 100 * 1024 * 1024) {
-        CHUNK_SIZE = 50000; // 50 KB
-        console.log('chunk A ', file.fileData.byteLength / 1000000)
-    } else if (file.fileData.byteLength < 200 * 1024 * 1024) {
-        CHUNK_SIZE = 100000; // 100 KB
-        console.log('chunk B ', file.fileData.byteLength / 1000000)
-    } else if (file.fileData.byteLength < 500 * 1024 * 1024) {
-        CHUNK_SIZE = 200000; // 200 KB
-        console.log('chunk C ', file.fileData.byteLength / 1000000)
-    } else {
-        CHUNK_SIZE = 500000; // 500 KB
-        console.log('chunk D ', file.fileData.byteLength / 1000000)
-    }
-    let chunkCount = Math.ceil(file.fileData.byteLength / CHUNK_SIZE);
-    // console.log(file.fileMetadata.Name, 'chink count')
-    for (let chunkId = lastChunkIDUploaded + plusOne; chunkId < chunkCount + 1; chunkId++) {
-        if (isResumed) {
-            const chunk = file.fileData.slice(chunkId * CHUNK_SIZE, (chunkId * CHUNK_SIZE) + CHUNK_SIZE);
+    if (this.fileData) return this.fileData;
 
-            const response = await fetch("/upload", {
-                "method": "POST",
-                "headers": {
-                    "content-type": "application/octet-stream",
-                    "content-length": chunk.byteLength,
-                    "file-name": file.fileMetadata.Name
-                },
-                "body": chunk
-            });
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      const file = this.fileInput.files[0];
 
-            if (response.status === 201) {
-                lastChunkIDUploaded = chunkId;
-                // console.log('lastuploadedchunkid', lastChunkIDUploaded);
-                divOutput.textContent = `${lastChunkIDUploaded} uploaded out of ${chunkCount}`;
-            } else {
-                divOutput.textContent = `${chunkId} uploaded out of ${chunkCount}, couldn't upload further`;
-            }
-        } else {
-            // console.log('paused');
-            return;
+      reader.onload = (event) => {
+        this.fileData = {
+          data: event.target.result,
+          metadata: {
+            name: file.name,
+            size: file.size,
+            type: file.type
+          }
+        };
+        resolve(this.fileData);
+      };
+
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  async uploadChunks(file) {
+    const totalChunks = Math.ceil(file.data.byteLength / this.chunkSize);
+    
+    for (let chunkId = this.lastChunkId; chunkId < totalChunks; chunkId++) {
+      if (this.isPaused) {
+        this.updateStatus(`Paused at chunk ${chunkId}/${totalChunks}`);
+        return;
+      }
+
+      const chunk = file.data.slice(
+        chunkId * this.chunkSize,
+        (chunkId + 1) * this.chunkSize
+      );
+
+      let retries = 0;
+      while (retries < this.maxRetries) {
+        try {
+          await this.uploadChunk(chunk, file.metadata.name);
+          this.lastChunkId = chunkId;
+          this.updateStatus(`Uploaded ${chunkId + 1}/${totalChunks} chunks`);
+          break;
+        } catch (error) {
+          retries++;
+          if (retries === this.maxRetries) {
+            throw new Error(`Failed to upload chunk after ${this.maxRetries} attempts`);
+          }
+          await new Promise(resolve => setTimeout(resolve, 1000 * retries));
         }
+      }
     }
 
+    this.updateStatus('Upload complete!');
+    this.reset();
+  }
+
+  async uploadChunk(chunk, fileName) {
+    const response = await fetch("/upload", {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "content-length": chunk.byteLength,
+        "file-name": fileName
+      },
+      body: chunk
+    });
+
+    if (!response.ok) {
+      throw new Error(`Upload failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  togglePause() {
+    this.isPaused = !this.isPaused;
+    this.pauseBtn.value = this.isPaused ? 'paused' : 'resumed';
+    
+    if (!this.isPaused && this.fileData) {
+      this.uploadChunks(this.fileData);
+    }
+  }
+
+  updateStatus(message) {
+    this.output.textContent = message;
+  }
+
+  reset() {
+    this.initState();
+  }
 }
+
+// Initialize uploader
+const uploader = new FileUploader({
+  chunkSize: 50000,
+  maxRetries: 3
+});
